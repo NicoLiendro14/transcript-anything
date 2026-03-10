@@ -7,7 +7,8 @@
     "activeTab",
     "storage",
     "tabCapture",
-    "offscreen"
+    "offscreen",
+    "downloads"
   ],
   "host_permissions": [
     "https://teams.cloud.microsoft/*",

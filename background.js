@@ -93,12 +93,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === "recording-complete") {
+    isRecording = false;
+    recordingBytesWritten = msg.bytesWritten || recordingBytesWritten;
+    recordingSegments = msg.segmentCount || recordingSegments;
+
+    chrome.downloads.download({
+      url: msg.blobUrl,
+      filename: msg.filename || recordingFilename,
+      saveAs: false
+    }, (downloadId) => {
+      if (chrome.runtime.lastError) {
+        console.error("[BG] Download error:", chrome.runtime.lastError.message);
+      }
+    });
+
+    closeOffscreen();
+    return false;
+  }
+
   if (msg.type === "recording-status") {
-    if (msg.status === "stopped" || msg.status === "error") {
+    if (msg.status === "error") {
       isRecording = false;
-      recordingBytesWritten = msg.bytesWritten || recordingBytesWritten;
-      recordingSegments = msg.segmentCount || recordingSegments;
-      recordingFilename = msg.filename || recordingFilename;
     }
     return false;
   }
@@ -152,6 +168,13 @@ async function sendToOffscreen(message) {
   return chrome.runtime.sendMessage({ ...message, target: "offscreen" });
 }
 
+async function closeOffscreen() {
+  if (offscreenCreated) {
+    try { await chrome.offscreen.closeDocument(); } catch (e) {}
+    offscreenCreated = false;
+  }
+}
+
 async function handleStartRecording(tabId, filename) {
   const streamId = await new Promise((resolve, reject) => {
     chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
@@ -189,13 +212,6 @@ async function handleStopRecording() {
   } catch (e) {}
 
   isRecording = false;
-
-  if (offscreenCreated) {
-    try {
-      await chrome.offscreen.closeDocument();
-    } catch (e) {}
-    offscreenCreated = false;
-  }
 
   return {
     ok: true,

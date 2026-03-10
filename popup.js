@@ -4,13 +4,11 @@ const lineCountEl = document.getElementById("line-count");
 const speakerCountEl = document.getElementById("speaker-count");
 
 // --- Recording UI elements ---
-const recSetup = document.getElementById("rec-setup");
 const recReady = document.getElementById("rec-ready");
 const recActive = document.getElementById("rec-active");
 const recDone = document.getElementById("rec-done");
 const recTimer = document.getElementById("rec-timer");
 const recSize = document.getElementById("rec-size");
-const recFolderPath = document.getElementById("rec-folder-path");
 const recDoneText = document.getElementById("rec-done-text");
 
 let recTimerInterval = null;
@@ -130,53 +128,8 @@ loadTranscript();
 setInterval(loadTranscript, 2000);
 
 // =====================================================
-// Recording logic: File System Access + IndexedDB + UI
+// Recording UI logic
 // =====================================================
-
-const IDB_NAME = "teams-recorder";
-const IDB_STORE = "handles";
-const IDB_KEY = "directoryHandle";
-
-function openIDB() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(IDB_NAME, 1);
-    req.onupgradeneeded = () => {
-      req.result.createObjectStore(IDB_STORE);
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function saveDirectoryHandle(handle) {
-  const db = await openIDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(IDB_STORE, "readwrite");
-    tx.objectStore(IDB_STORE).put(handle, IDB_KEY);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-async function getDirectoryHandle() {
-  const db = await openIDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(IDB_STORE, "readonly");
-    const req = tx.objectStore(IDB_STORE).get(IDB_KEY);
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function clearDirectoryHandle() {
-  const db = await openIDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(IDB_STORE, "readwrite");
-    tx.objectStore(IDB_STORE).delete(IDB_KEY);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
 
 function formatDuration(ms) {
   const totalSec = Math.floor(ms / 1000);
@@ -202,7 +155,7 @@ function generateFilename() {
 }
 
 function showRecPanel(panelId) {
-  [recSetup, recReady, recActive, recDone].forEach(el => el.style.display = "none");
+  [recReady, recActive, recDone].forEach(el => el.style.display = "none");
   const target = document.getElementById(panelId);
   if (target) target.style.display = "block";
 }
@@ -217,26 +170,15 @@ async function initRecordingUI() {
     currentFilename = status.filename || "";
     showRecPanel("rec-active");
     startTimerUI(status.bytesWritten);
-    startStatusPoller();
     return;
   }
 
-  const handle = await getDirectoryHandle();
-  if (handle) {
-    try {
-      recFolderPath.textContent = handle.name;
-      showRecPanel("rec-ready");
-    } catch {
-      showRecPanel("rec-setup");
-    }
-  } else {
-    showRecPanel("rec-setup");
-  }
+  showRecPanel("rec-ready");
 }
 
 function startTimerUI(initialBytes) {
   updateTimerDisplay();
-  recSize.textContent = `${formatBytes(initialBytes || 0)} escritos`;
+  recSize.textContent = `${formatBytes(initialBytes || 0)} en memoria`;
   recTimerInterval = setInterval(updateTimerAndStatus, 1000);
 }
 
@@ -250,11 +192,10 @@ function updateTimerAndStatus() {
   chrome.runtime.sendMessage({ type: "get-recording-status" }, (status) => {
     if (!status) return;
     if (status.bytesWritten) {
-      recSize.textContent = `${formatBytes(status.bytesWritten)} escritos`;
+      recSize.textContent = `${formatBytes(status.bytesWritten)} en memoria`;
     }
     if (!status.isRecording && recTimerInterval) {
       stopTimerUI();
-      stopStatusPoller();
       showRecPanel("rec-ready");
     }
   });
@@ -267,68 +208,14 @@ function stopTimerUI() {
   }
 }
 
-let statusPollerInterval = null;
-
-function startStatusPoller() {
-  if (statusPollerInterval) return;
-  statusPollerInterval = setInterval(() => {
-    chrome.runtime.sendMessage({ type: "get-recording-status" }, (status) => {
-      if (!status) return;
-      if (status.bytesWritten) {
-        recSize.textContent = `${formatBytes(status.bytesWritten)} escritos`;
-      }
-    });
-  }, 2000);
-}
-
-function stopStatusPoller() {
-  if (statusPollerInterval) {
-    clearInterval(statusPollerInterval);
-    statusPollerInterval = null;
-  }
-}
-
-async function chooseFolder() {
-  try {
-    const handle = await window.showDirectoryPicker({ mode: "readwrite" });
-    await saveDirectoryHandle(handle);
-    recFolderPath.textContent = handle.name;
-    showRecPanel("rec-ready");
-    return handle;
-  } catch (e) {
-    if (e.name !== "AbortError") {
-      console.error("[Popup] Folder picker error:", e);
-    }
-    return null;
-  }
-}
-
-async function verifyAndGetHandle() {
-  let handle = await getDirectoryHandle();
-  if (!handle) return null;
-
-  const perm = await handle.requestPermission({ mode: "readwrite" });
-  if (perm !== "granted") {
-    await clearDirectoryHandle();
-    return null;
-  }
-  return handle;
-}
-
 async function startRecording() {
-  let dirHandle = await verifyAndGetHandle();
-  if (!dirHandle) {
-    dirHandle = await chooseFolder();
-    if (!dirHandle) return;
-  }
-
-  currentFilename = generateFilename();
-
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) {
     console.error("[Popup] No active tab found");
     return;
   }
+
+  currentFilename = generateFilename();
 
   const result = await new Promise(resolve => {
     chrome.runtime.sendMessage({
@@ -347,12 +234,9 @@ async function startRecording() {
   recStartTime = Date.now();
   showRecPanel("rec-active");
   startTimerUI(0);
-  startStatusPoller();
 }
 
 async function stopRecording() {
-  stopStatusPoller();
-
   const result = await new Promise(resolve => {
     chrome.runtime.sendMessage({ type: "stop-recording" }, resolve);
   });
@@ -364,7 +248,7 @@ async function stopRecording() {
   const fname = result?.filename || currentFilename;
 
   recDoneText.textContent =
-    `Grabación guardada: ${fname} (${formatBytes(totalBytes)}, ${formatDuration(duration)})`;
+    `${fname} (${formatBytes(totalBytes)}, ${formatDuration(duration)}) — descargando...`;
   showRecPanel("rec-done");
 
   setTimeout(() => {
@@ -374,11 +258,6 @@ async function stopRecording() {
 
 // --- Recording event listeners ---
 
-document.getElementById("btn-choose-folder").addEventListener("click", chooseFolder);
-document.getElementById("btn-change-folder").addEventListener("click", async (e) => {
-  e.preventDefault();
-  await chooseFolder();
-});
 document.getElementById("btn-start-rec").addEventListener("click", startRecording);
 document.getElementById("btn-stop-rec").addEventListener("click", stopRecording);
 
