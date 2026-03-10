@@ -8,7 +8,6 @@ let recordingStartTime = 0;
 let recordingBytesWritten = 0;
 let recordingSegments = 0;
 let recordingFilename = "";
-let pendingChunks = [];
 let offscreenCreated = false;
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -61,7 +60,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // --- Recording handlers ---
 
   if (msg.type === "start-recording") {
-    handleStartRecording(msg.tabId).then(result => {
+    handleStartRecording(msg.tabId, msg.filename).then(result => {
       sendResponse(result);
     }).catch(err => {
       sendResponse({ ok: false, error: err.message });
@@ -79,28 +78,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "get-recording-status") {
-    const duration = isRecording ? Date.now() - recordingStartTime : 0;
-    sendResponse({
-      isRecording,
-      recordingStartTime,
-      bytesWritten: recordingBytesWritten,
-      segments: recordingSegments,
-      duration,
-      filename: recordingFilename
+    fetchOffscreenStatus().then(status => {
+      sendResponse(status);
+    }).catch(() => {
+      sendResponse({
+        isRecording,
+        recordingStartTime,
+        bytesWritten: recordingBytesWritten,
+        segments: recordingSegments,
+        duration: isRecording ? Date.now() - recordingStartTime : 0,
+        filename: recordingFilename
+      });
     });
-    return true;
-  }
-
-  if (msg.type === "recording-chunk") {
-    recordingBytesWritten = msg.bytesWritten || recordingBytesWritten;
-    recordingSegments = msg.segment || recordingSegments;
-    pendingChunks.push(msg.chunk);
-    return false;
-  }
-
-  if (msg.type === "get-pending-chunks") {
-    const chunks = pendingChunks.splice(0);
-    sendResponse({ chunks, bytesWritten: recordingBytesWritten, segments: recordingSegments });
     return true;
   }
 
@@ -109,15 +98,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       isRecording = false;
       recordingBytesWritten = msg.bytesWritten || recordingBytesWritten;
       recordingSegments = msg.segmentCount || recordingSegments;
+      recordingFilename = msg.filename || recordingFilename;
     }
-    if (msg.status === "recording") {
-      isRecording = true;
-    }
-    return false;
-  }
-
-  if (msg.type === "set-recording-filename") {
-    recordingFilename = msg.filename;
     return false;
   }
 });
@@ -166,7 +148,11 @@ async function ensureOffscreenDocument() {
   offscreenCreated = true;
 }
 
-async function handleStartRecording(tabId) {
+async function sendToOffscreen(message) {
+  return chrome.runtime.sendMessage({ ...message, target: "offscreen" });
+}
+
+async function handleStartRecording(tabId, filename) {
   const streamId = await new Promise((resolve, reject) => {
     chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
       if (chrome.runtime.lastError) {
@@ -179,9 +165,10 @@ async function handleStartRecording(tabId) {
 
   await ensureOffscreenDocument();
 
-  const result = await chrome.runtime.sendMessage({
-    type: "start-recording",
-    streamId
+  const result = await sendToOffscreen({
+    type: "offscreen-start-recording",
+    streamId,
+    filename
   });
 
   if (result && result.ok) {
@@ -189,16 +176,17 @@ async function handleStartRecording(tabId) {
     recordingStartTime = Date.now();
     recordingBytesWritten = 0;
     recordingSegments = 0;
-    pendingChunks = [];
+    recordingFilename = filename;
   }
 
   return result;
 }
 
 async function handleStopRecording() {
-  const result = await chrome.runtime.sendMessage({
-    type: "stop-recording"
-  });
+  let result = { ok: true };
+  try {
+    result = await sendToOffscreen({ type: "offscreen-stop-recording" });
+  } catch (e) {}
 
   isRecording = false;
 
@@ -211,15 +199,40 @@ async function handleStopRecording() {
 
   return {
     ok: true,
-    bytesWritten: recordingBytesWritten,
-    segments: recordingSegments,
-    duration: Date.now() - recordingStartTime,
-    filename: recordingFilename
+    bytesWritten: result?.bytesWritten || recordingBytesWritten,
+    segments: result?.segmentCount || recordingSegments,
+    duration: result?.duration || (Date.now() - recordingStartTime),
+    filename: result?.filename || recordingFilename
+  };
+}
+
+async function fetchOffscreenStatus() {
+  if (!offscreenCreated) {
+    return {
+      isRecording: false,
+      recordingStartTime: 0,
+      bytesWritten: 0,
+      segments: 0,
+      duration: 0,
+      filename: ""
+    };
+  }
+  const s = await sendToOffscreen({ type: "offscreen-get-status" });
+  isRecording = s.recording;
+  recordingBytesWritten = s.bytesWritten;
+  recordingSegments = s.segmentCount;
+  return {
+    isRecording: s.recording,
+    recordingStartTime,
+    bytesWritten: s.bytesWritten,
+    segments: s.segmentCount,
+    duration: s.duration,
+    filename: s.filename || recordingFilename
   };
 }
 
 chrome.runtime.onSuspend.addListener(() => {
   if (isRecording) {
-    chrome.runtime.sendMessage({ type: "stop-recording" });
+    sendToOffscreen({ type: "offscreen-stop-recording" });
   }
 });

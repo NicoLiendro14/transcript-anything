@@ -15,8 +15,6 @@ const recDoneText = document.getElementById("rec-done-text");
 
 let recTimerInterval = null;
 let recStartTime = 0;
-let writableStream = null;
-let currentFileHandle = null;
 let currentFilename = "";
 
 function loadTranscript() {
@@ -216,9 +214,10 @@ async function initRecordingUI() {
 
   if (status && status.isRecording) {
     recStartTime = status.recordingStartTime;
+    currentFilename = status.filename || "";
     showRecPanel("rec-active");
     startTimerUI(status.bytesWritten);
-    startChunkPoller();
+    startStatusPoller();
     return;
   }
 
@@ -238,12 +237,27 @@ async function initRecordingUI() {
 function startTimerUI(initialBytes) {
   updateTimerDisplay();
   recSize.textContent = `${formatBytes(initialBytes || 0)} escritos`;
-  recTimerInterval = setInterval(updateTimerDisplay, 1000);
+  recTimerInterval = setInterval(updateTimerAndStatus, 1000);
 }
 
 function updateTimerDisplay() {
   const elapsed = Date.now() - recStartTime;
   recTimer.textContent = `Grabando... ${formatDuration(elapsed)}`;
+}
+
+function updateTimerAndStatus() {
+  updateTimerDisplay();
+  chrome.runtime.sendMessage({ type: "get-recording-status" }, (status) => {
+    if (!status) return;
+    if (status.bytesWritten) {
+      recSize.textContent = `${formatBytes(status.bytesWritten)} escritos`;
+    }
+    if (!status.isRecording && recTimerInterval) {
+      stopTimerUI();
+      stopStatusPoller();
+      showRecPanel("rec-ready");
+    }
+  });
 }
 
 function stopTimerUI() {
@@ -253,37 +267,24 @@ function stopTimerUI() {
   }
 }
 
-let chunkPollerInterval = null;
+let statusPollerInterval = null;
 
-function startChunkPoller() {
-  if (chunkPollerInterval) return;
-  chunkPollerInterval = setInterval(pollAndWriteChunks, 2000);
-}
-
-function stopChunkPoller() {
-  if (chunkPollerInterval) {
-    clearInterval(chunkPollerInterval);
-    chunkPollerInterval = null;
-  }
-}
-
-async function pollAndWriteChunks() {
-  try {
-    const result = await new Promise(resolve => {
-      chrome.runtime.sendMessage({ type: "get-pending-chunks" }, resolve);
-    });
-    if (!result || !result.chunks || result.chunks.length === 0) return;
-
-    for (const chunkArray of result.chunks) {
-      if (writableStream) {
-        const buffer = new Uint8Array(chunkArray);
-        await writableStream.write(buffer);
+function startStatusPoller() {
+  if (statusPollerInterval) return;
+  statusPollerInterval = setInterval(() => {
+    chrome.runtime.sendMessage({ type: "get-recording-status" }, (status) => {
+      if (!status) return;
+      if (status.bytesWritten) {
+        recSize.textContent = `${formatBytes(status.bytesWritten)} escritos`;
       }
-    }
+    });
+  }, 2000);
+}
 
-    recSize.textContent = `${formatBytes(result.bytesWritten)} escritos`;
-  } catch (e) {
-    console.error("[Popup] Error writing chunks:", e);
+function stopStatusPoller() {
+  if (statusPollerInterval) {
+    clearInterval(statusPollerInterval);
+    statusPollerInterval = null;
   }
 }
 
@@ -322,25 +323,23 @@ async function startRecording() {
   }
 
   currentFilename = generateFilename();
-  currentFileHandle = await dirHandle.getFileHandle(currentFilename, { create: true });
-  writableStream = await currentFileHandle.createWritable();
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) {
     console.error("[Popup] No active tab found");
-    if (writableStream) { await writableStream.close(); writableStream = null; }
     return;
   }
 
-  chrome.runtime.sendMessage({ type: "set-recording-filename", filename: currentFilename });
-
   const result = await new Promise(resolve => {
-    chrome.runtime.sendMessage({ type: "start-recording", tabId: tab.id }, resolve);
+    chrome.runtime.sendMessage({
+      type: "start-recording",
+      tabId: tab.id,
+      filename: currentFilename
+    }, resolve);
   });
 
   if (!result || !result.ok) {
     console.error("[Popup] Start recording failed:", result?.error);
-    if (writableStream) { await writableStream.close(); writableStream = null; }
     alert("Error al iniciar la grabación: " + (result?.error || "desconocido"));
     return;
   }
@@ -348,33 +347,24 @@ async function startRecording() {
   recStartTime = Date.now();
   showRecPanel("rec-active");
   startTimerUI(0);
-  startChunkPoller();
+  startStatusPoller();
 }
 
 async function stopRecording() {
-  stopChunkPoller();
-
-  await pollAndWriteChunks();
+  stopStatusPoller();
 
   const result = await new Promise(resolve => {
     chrome.runtime.sendMessage({ type: "stop-recording" }, resolve);
   });
 
-  await new Promise(r => setTimeout(r, 500));
-  await pollAndWriteChunks();
-
-  if (writableStream) {
-    try { await writableStream.close(); } catch (e) {}
-    writableStream = null;
-  }
-
   stopTimerUI();
 
   const totalBytes = result?.bytesWritten || 0;
   const duration = result?.duration || (Date.now() - recStartTime);
+  const fname = result?.filename || currentFilename;
 
   recDoneText.textContent =
-    `Grabación guardada: ${currentFilename} (${formatBytes(totalBytes)}, ${formatDuration(duration)})`;
+    `Grabación guardada: ${fname} (${formatBytes(totalBytes)}, ${formatDuration(duration)})`;
   showRecPanel("rec-done");
 
   setTimeout(() => {
