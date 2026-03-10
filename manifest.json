@@ -5,7 +5,9 @@
   "description": "Captura subtítulos de Microsoft Teams en tiempo real desde el DOM.",
   "permissions": [
     "activeTab",
-    "storage"
+    "storage",
+    "tabCapture",
+    "offscreen"
   ],
   "host_permissions": [
     "https://teams.cloud.microsoft/*",

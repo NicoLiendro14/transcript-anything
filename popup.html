@@ -11,6 +11,44 @@
       <span id="status" class="status waiting">Esperando captions...</span>
     </div>
 
+    <div id="recording-section" class="recording-section">
+      <div id="rec-setup" class="rec-panel" style="display:none;">
+        <div class="rec-banner">
+          <span class="rec-banner-icon">📁</span>
+          <span>Configurá una carpeta para las grabaciones</span>
+        </div>
+        <button id="btn-choose-folder" class="btn-primary">Elegir carpeta</button>
+      </div>
+
+      <div id="rec-ready" class="rec-panel" style="display:none;">
+        <button id="btn-start-rec" class="btn-record">
+          <span class="rec-dot"></span> Grabar Reunión
+        </button>
+        <div class="rec-folder-info">
+          <span id="rec-folder-path" class="rec-folder-path"></span>
+          <a href="#" id="btn-change-folder" class="rec-change-link">Cambiar carpeta</a>
+        </div>
+      </div>
+
+      <div id="rec-active" class="rec-panel" style="display:none;">
+        <div class="rec-active-header">
+          <span class="rec-pulse"></span>
+          <span id="rec-timer" class="rec-timer">Grabando... 00:00:00</span>
+        </div>
+        <div class="rec-stats">
+          <span id="rec-size">0 MB escritos</span>
+        </div>
+        <button id="btn-stop-rec" class="btn-stop">Detener Grabación</button>
+      </div>
+
+      <div id="rec-done" class="rec-panel" style="display:none;">
+        <div class="rec-done-message">
+          <span class="rec-done-icon">✅</span>
+          <span id="rec-done-text">Grabación guardada</span>
+        </div>
+      </div>
+    </div>
+
     <div id="transcript" class="transcript"></div>
 
     <div class="actions">
