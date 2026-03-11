@@ -1,5 +1,6 @@
 let mediaRecorder = null;
 let mediaStream = null;
+let audioCtx = null;
 let recordedChunks = [];
 let bytesWritten = 0;
 let segmentCount = 0;
@@ -58,7 +59,8 @@ async function handleStartRecording(streamId, filename) {
       mandatory: {
         chromeMediaSource: "tab",
         chromeMediaSourceId: streamId
-      }
+      },
+      optional: [{ googDisableLocalEcho: false }]
     },
     video: {
       mandatory: {
@@ -69,6 +71,15 @@ async function handleStartRecording(streamId, filename) {
   });
 
   mediaStream = stream;
+
+  // Re-route captured audio back to speakers so the user can still hear the meeting
+  try {
+    audioCtx = new AudioContext();
+    const source = audioCtx.createMediaStreamSource(stream);
+    source.connect(audioCtx.destination);
+  } catch (e) {
+    console.warn("[Offscreen] AudioContext playback setup failed (non-fatal):", e);
+  }
 
   let mimeType = "video/webm;codecs=vp9,opus";
   if (!MediaRecorder.isTypeSupported(mimeType)) {
@@ -130,6 +141,10 @@ function handleStopRecording() {
     }
 
     mediaRecorder.addEventListener("stop", () => {
+      if (audioCtx) {
+        try { audioCtx.close(); } catch (e) {}
+        audioCtx = null;
+      }
       if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
         mediaStream = null;
@@ -151,6 +166,10 @@ function handleStopRecording() {
 window.addEventListener("beforeunload", () => {
   if (mediaRecorder && mediaRecorder.state !== "inactive") {
     mediaRecorder.stop();
+  }
+  if (audioCtx) {
+    try { audioCtx.close(); } catch (e) {}
+    audioCtx = null;
   }
   if (mediaStream) {
     mediaStream.getTracks().forEach(track => track.stop());
